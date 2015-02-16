@@ -1,25 +1,107 @@
 ---
-title: "Reproducible Research: Peer Assessment 1"
-output: 
-  html_document:
-    keep_md: true
+title: "Reproducible Research Coursera PA1"
+author: "ahauptma"
+date: "Wednesday, February 11, 2015"
+output: html_document
 ---
 
+EXPLANATION OF ASSIGNMENT
 
-## Loading and preprocessing the data
+```{r}
+# LOAD AND CLEAN
+step.data <- read.csv("activity/activity.csv", as.is=TRUE)
+anyNA(step.data$date <- as.Date(step.data$date))
+summary(step.data)
+```
+
+First, we load the data from our working directory and clean it.  We see that the date field can be converted to Date class with no missing values and that about `r paste0(round(100*mean(is.na(step.data$steps)), 0), '%')` of the $steps entries are NA.
+
+```{r}
+# TOTAL STEPS PER DAY
+library(xtable)
+steps.per.day <- aggregate(steps ~ as.character(date), step.data, sum)
+names(steps.per.day)[1] <- "date"
+print(xtable(steps.per.day))
+# HISTOGRAM OF STEP COUNTS
+library(ggplot2)
+ggplot(aes(x=steps), data=steps.per.day) + geom_bar()
+# MEAN AND MEDIAN STEPS PER DAY
+# mean(steps.per.day$steps)
+# median(steps.per.day$steps)
+```
+Aggregated by day, we see that daily steps for this respondent are typically between 10 and 12 thousand, but can be over 20 thousand.  The mean number of steps is `r mean(steps.per.day$steps)` and the median number is an almost identical `r median(steps.per.day$steps)`.
+
+```{r}
+# LINE GRAPH OF AVERAGE STEPS IN EACH FIVE MINUTE BIN
+steps.per.bin <- aggregate(steps ~ interval, step.data, mean)
+hr <- steps.per.bin$interval %/% 100
+min <- sprintf("%02d", steps.per.bin$interval %% 100)
+steps.per.bin$timebin <- paste(hr, min, sep=':')
+steps.per.bin$minutes <- 60 * hr + as.numeric(min)
+ggplot(aes(x=minutes, y=steps), data=steps.per.bin) + geom_line() +
+  scale_x_continuous(breaks=steps.per.bin[match(seq(0, 2000, 400), steps.per.bin$interval),"minutes"], 
+                     labels=steps.per.bin[match(seq(0, 2000, 400), steps.per.bin$interval),"timebin"])
+# TIME BIN WITH HIGHEST AVERAGE
+#steps.per.bin[match(max(steps.per.bin$steps), steps.per.bin$steps), ]
+```
+Graphing average steps by five-minute time bin shows us a huge spike around 9 AM and smaller ones around 12 PM, 4 PM and 7 PM.  The five-minute bin with the highest average is `r steps.per.bin[match(max(steps.per.bin$steps), steps.per.bin$steps), "timebin"]` with `r steps.per.bin[match(max(steps.per.bin$steps), steps.per.bin$steps), "steps"]` steps on average.
+
+There are `r sum(is.na(step.data$steps))` missing step values in the data.  We will construct imputed values by using the values of nearby times on the same day and of 
+very nearby times on other days.  We determine the weightings as follows:
+
+* 3: Five minutes away from the missing time bin on the same day as the missing time bin.
+* 2: Ten minutes away on the same day or zero minutes away on another day.
+* 1: Fifteen minutes away on the same day or five minutes away on another day.
+
+Values on the other side of midnight (e.g. fifteen minutes before 12:10 AM) are not counted, which should affect the final analysis very little; few steps are taken near midnight.
 
 
 
-## What is mean total number of steps taken per day?
+```{r}
+# NUMBER OF MISSING VALUES (NA)
+# sum(is.na(step.data$steps))
+# IMPUTE MISSING VALUES IN NEW DATA SET
+as.minutes <- 60 * (step.data$interval %/% 100) + step.data$interval %% 100
+impute.func <- Vectorize(function(tgt.time, tgt.day) {
+  day.weight <- -2 * as.numeric(step.data$date!=tgt.day)
+  time.weight <- 4 - abs(tgt.time - as.minutes)/5
+  sum(step.data$steps * 
+    (pmax(0, time.weight + day.weight) * !is.na(step.data$steps)) / 
+    sum((pmax(0, time.weight + day.weight) * !is.na(step.data$steps))), na.rm=T)
+})
 
+no.data <- subset(step.data, is.na(steps))
+no.data$minutes <- as.minutes[is.na(step.data$steps)]
+no.data$imputed.steps <- impute.func(no.data$minutes, no.data$date)
+#summary(no.data$imputed.steps)
+step.data.imp <- step.data
+step.data.imp[is.na(step.data$steps), "steps"] <- no.data$imputed.steps
 
+# HISTOGRAM OF STEP COUNTS w/ NEW DATA
+steps.per.day.imp <- aggregate(steps ~ as.character(date), step.data.imp, sum)
+names(steps.per.day.imp)[1] <- "date"
+ggplot(aes(x=steps), data=steps.per.day.imp) + geom_bar()
+# MEAN AND MEDIAN STEPS PER DAY w/ NEW DATA
+mean(steps.per.day.imp$steps)
+median(steps.per.day.imp$steps)
+```
 
-## What is the average daily activity pattern?
+The mean and median change very little after imputation, to `r mean(steps.per.day.imp$steps)` and `r median(steps.per.day.imp$steps)` respectively.  However, the median sort of day (in terms of total steps) is much more represented after imputation than before.  This is not surprising, as the best guess for an entire missing day is often the mean/median, and the missing data clusters quite a bit by day.
 
+```{r}
+# PANEL PLOT TIME BIN LINE GRAPH OF MEAN STEPS BY WEEKEND/WEEKDAY FACTOR
+step.data.imp$wday <- weekdays(as.POSIXct(step.data.imp$date))
+daytype.func <- Vectorize(function(x) if(x %in% c("Saturday", "Sunday")) "Weekend" else "Weekday")
+step.data.imp$day.type <- as.factor(daytype.func(step.data.imp$wday))
+steps.per.bin.type <- aggregate(steps ~ interval + day.type, step.data.imp, mean)
+hr <- steps.per.bin.type$interval %/% 100
+min <- sprintf("%02d", steps.per.bin.type$interval %% 100)
+steps.per.bin.type$timebin <- paste(hr, min, sep=':')
+steps.per.bin.type$minutes <- 60 * hr + as.numeric(min)
+ggplot(aes(x=minutes, y=steps), data=steps.per.bin.type) + geom_line() +
+  facet_grid(. ~ day.type) +
+  scale_x_continuous(breaks=steps.per.bin.type[match(seq(0, 2000, 400), steps.per.bin.type$interval),"minutes"], 
+                     labels=steps.per.bin.type[match(seq(0, 2000, 400), steps.per.bin.type$interval),"timebin"])
+```
 
-
-## Imputing missing values
-
-
-
-## Are there differences in activity patterns between weekdays and weekends?
+Weekdays have much bigger spikes around 9 AM (does the subject exercise before work?) and weekends have step counts more spread out.  There is a noticable difference between weekdays and weekends.
